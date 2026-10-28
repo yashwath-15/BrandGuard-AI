@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="BrandGuard AI", version="2.2.0")
+app = FastAPI(title="BrandGuard AI", version="2.2.1")
 
 # Setup Gemini AI
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -174,13 +174,15 @@ def get_guidelines():
 
 @app.post("/api/guidelines/auto-extract")
 def auto_extract_guidelines(req: ExtractRulesRequest):
+    global CURRENT_BRAND  # Declared at the very start to prevent syntax errors
+    
     brand_input = req.brand_or_url.strip()
     if not brand_input:
         raise HTTPException(status_code=400, detail="Brand name or Website URL required")
         
     clean_name = brand_input.replace("https://", "").replace("http://", "").split(".")[0].capitalize()
 
-    # Brand-specific curated fallbacks
+    # Pre-curated fallback profiles
     fallbacks = {
         "Instagram": {
             "brand_name": "Instagram",
@@ -223,7 +225,7 @@ def auto_extract_guidelines(req: ExtractRulesRequest):
         }
     }
 
-    # Use AI extraction if key exists
+    # Attempt AI extraction if Gemini key is available
     if HAS_GEMINI:
         try:
             prompt = f"""
@@ -246,14 +248,12 @@ Return ONLY valid JSON.
             response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
             extracted = json.loads(response.text)
             
-            global CURRENT_BRAND
             CURRENT_BRAND = extracted
             return {"status": "success", "source": "Gemini AI Extraction", "guidelines": CURRENT_BRAND}
         except Exception as e:
             print(f"Gemini auto-extract fallback triggered: {e}")
 
     # Fallback to predefined or generated rules
-    global CURRENT_BRAND
     if clean_name in fallbacks:
         CURRENT_BRAND = fallbacks[clean_name]
     else:
@@ -287,7 +287,7 @@ def audit_content(req: AuditRequest):
         engine_used = f"Hybrid (Rules + Gemini 1.5) for {CURRENT_BRAND['brand_name']}"
     else:
         if req.use_mock or not HAS_GEMINI:
-            if any(term in req.content.lower() for term in ["100%", "instant", "unbeatable"]):
+            if any(term in req.content.lower() for term in ["100%", "instant", "unbeatable", "hack"]):
                 findings.append(Finding(
                     id=f"mock-fact-{len(findings)+1}",
                     issue=f"Unverified performance claim for {CURRENT_BRAND['brand_name']}.",
@@ -397,12 +397,10 @@ FRONTEND_HTML = """<!DOCTYPE html>
           const data = await res.json();
           setGuidelines(data.guidelines);
           
-          // Automatically update the editor with this brand's custom flawed draft
           if (data.guidelines.sample_flawed_draft) {
             setContent(data.guidelines.sample_flawed_draft);
           }
           
-          // Clear previous audit result so user sees fresh state
           setAuditResult(null);
           setActiveTab("editor");
         } catch (e) {
