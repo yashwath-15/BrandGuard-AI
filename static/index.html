@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BrandGuard AI — Content Audit & Governance</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { background-color: #0B132B; color: #E0E1DD; font-family: system-ui, -apple-system, sans-serif; }
+    .card { background: #1C2541; border: 1px solid #3A506B; }
+    .badge-high { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; }
+    .badge-medium { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #f59e0b; }
+    .badge-low { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid #3b82f6; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const SAMPLE_BAD_TEXT = `Our company guarantees 100% risk-free service for every business. We are the cheapest in the world and promise instant zero-downtime forever with our bulletproof architecture.`;
+
+    function App() {
+      const [content, setContent] = useState(SAMPLE_BAD_TEXT);
+      const [useMock, setUseMock] = useState(false);
+      const [loading, setLoading] = useState(false);
+      const [extractLoading, setExtractLoading] = useState(false);
+      const [websiteInput, setWebsiteInput] = useState("stripe.com");
+      const [auditResult, setAuditResult] = useState(null);
+      const [history, setHistory] = useState([]);
+      const [reviewerNotes, setReviewerNotes] = useState("");
+      const [activeTab, setActiveTab] = useState("editor");
+      const [guidelines, setGuidelines] = useState(null);
+
+      useEffect(() => {
+        fetchGuidelines();
+        fetchHistory();
+      }, []);
+
+      const fetchGuidelines = async () => {
+        try {
+          const res = await fetch("/api/guidelines");
+          const data = await res.json();
+          setGuidelines(data);
+        } catch(e) { console.error(e); }
+      };
+
+      const fetchHistory = async () => {
+        try {
+          const res = await fetch("/api/history");
+          const data = await res.json();
+          setHistory(data);
+        } catch(e) { console.error(e); }
+      };
+
+      const handleAutoExtract = async (target) => {
+        const query = target || websiteInput;
+        if (!query.trim()) return;
+        setExtractLoading(true);
+        try {
+          const res = await fetch("/api/guidelines/auto-extract", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ brand_or_url: query })
+          });
+          const data = await res.json();
+          setGuidelines(data.guidelines);
+          alert(`Successfully extracted rules for ${data.guidelines.brand_name}!`);
+        } catch (e) {
+          alert("Auto-extract failed: " + e.message);
+        } finally {
+          setExtractLoading(false);
+        }
+      };
+
+      const handleRunAudit = async () => {
+        setLoading(true);
+        try {
+          const res = await fetch("/api/audit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content, use_mock: useMock })
+          });
+          const data = await res.json();
+          setAuditResult(data);
+          fetchHistory();
+        } catch (e) {
+          alert("Audit failed: " + e.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleApplyFix = (finding) => {
+        if (!finding.highlight_text || !finding.suggested_fix) return;
+        const newText = content.replace(finding.highlight_text, finding.suggested_fix);
+        setContent(newText);
+        setAuditResult(prev => ({
+          ...prev,
+          findings: prev.findings.filter(f => f.id !== finding.id)
+        }));
+      };
+
+      const handleDecision = async (decision) => {
+        if (!auditResult) return;
+        try {
+          await fetch("/api/decision", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              audit_id: auditResult.id,
+              decision,
+              reviewer_notes: reviewerNotes
+            })
+          });
+          setAuditResult(prev => ({ ...prev, status: decision }));
+          fetchHistory();
+          alert(`Document successfully marked as ${decision}!`);
+        } catch (e) {
+          alert("Decision save failed: " + e.message);
+        }
+      };
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          {/* Header */}
+          <header className="border-b border-[#3A506B] px-6 py-4 flex items-center justify-between bg-[#0B132B]">
+            <div className="flex items-center space-x-3">
+              <div className="h-9 w-9 bg-emerald-500 rounded-lg flex items-center justify-center font-black text-slate-900 text-xl">B</div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h1 className="text-xl font-bold tracking-tight text-white">BrandGuard AI</h1>
+                  {guidelines && (
+                    <span className="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 px-2 py-0.5 rounded-full font-mono">
+                      Active: {guidelines.brand_name}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-400">Pre-Publish Content Governance & Multi-Brand Compliance</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center space-x-3">
+              <label className="flex items-center space-x-2 text-xs bg-[#1C2541] px-3 py-1.5 rounded-full border border-slate-700 cursor-pointer">
+                <input 
+                  type="checkbox" 
+                  checked={useMock} 
+                  onChange={(e) => setUseMock(e.target.checked)} 
+                  className="rounded text-emerald-500" 
+                />
+                <span className={useMock ? "text-amber-400 font-medium" : "text-slate-300"}>
+                  {useMock ? "Safe Mock Mode" : "Live Gemini AI"}
+                </span>
+              </label>
+
+              <button 
+                onClick={() => setContent(SAMPLE_BAD_TEXT)}
+                className="text-xs bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded"
+              >
+                Load Demo Text
+              </button>
+            </div>
+          </header>
+
+          {/* Navigation Bar */}
+          <div className="border-b border-[#3A506B] px-6 flex space-x-6 bg-[#1C2541]/50 text-sm">
+            <button 
+              onClick={() => setActiveTab("editor")} 
+              className={`py-3 border-b-2 font-medium ${activeTab === 'editor' ? 'border-emerald-400 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            >
+              Audit Studio & Editor
+            </button>
+            <button 
+              onClick={() => setActiveTab("guidelines")} 
+              className={`py-3 border-b-2 font-medium ${activeTab === 'guidelines' ? 'border-emerald-400 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            >
+              Brand Knowledge Base & Auto-Extract 🌐
+            </button>
+            <button 
+              onClick={() => setActiveTab("history")} 
+              className={`py-3 border-b-2 font-medium ${activeTab === 'history' ? 'border-emerald-400 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            >
+              Audit Trail & Approval Logs ({history.length})
+            </button>
+          </div>
+
+          {/* Main Body */}
+          <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
+            {activeTab === "editor" && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                
+                {/* Left Panel */}
+                <div className="lg:col-span-6 flex flex-col space-y-4">
+                  <div className="card p-5 rounded-xl shadow-lg flex-1 flex flex-col">
+                    <div className="flex justify-between items-center mb-3">
+                      <span className="text-sm font-semibold text-slate-200 uppercase tracking-wider">
+                        Content Editor (Auditing against: {guidelines ? guidelines.brand_name : "Default"})
+                      </span>
+                      <span className="text-xs text-slate-400">{content.length} chars</span>
+                    </div>
+
+                    <textarea
+                      className="w-full flex-1 bg-[#0B132B] border border-slate-700 rounded-lg p-4 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 font-mono min-h-[300px]"
+                      value={content}
+                      onChange={(e) => setContent(e.target.value)}
+                    />
+
+                    <div className="mt-4 flex items-center justify-between">
+                      <button
+                        onClick={handleRunAudit}
+                        disabled={loading || !content.trim()}
+                        className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-bold px-6 py-2.5 rounded-lg transition"
+                      >
+                        {loading ? "Auditing Content..." : "Run BrandGuard Audit"}
+                      </button>
+
+                      {auditResult && (
+                        <span className="text-xs text-slate-400">
+                          Engine: <strong className="text-emerald-400">{auditResult.execution_source}</strong>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Sign-off */}
+                  {auditResult && (
+                    <div className="card p-4 rounded-xl border border-slate-700">
+                      <h3 className="text-sm font-bold text-slate-200 mb-2">Reviewer Human-in-the-Loop Sign-off</h3>
+                      <input 
+                        type="text" 
+                        value={reviewerNotes} 
+                        onChange={(e) => setReviewerNotes(e.target.value)} 
+                        placeholder="Reviewer sign-off remarks..."
+                        className="w-full bg-[#0B132B] border border-slate-700 text-xs text-slate-200 rounded p-2 mb-3"
+                      />
+                      <div className="flex space-x-3">
+                        <button 
+                          onClick={() => handleDecision("Approved")}
+                          className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2 rounded text-xs transition"
+                        >
+                          Approve for Publication
+                        </button>
+                        <button 
+                          onClick={() => handleDecision("Changes Requested")}
+                          className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-semibold py-2 rounded text-xs transition"
+                        >
+                          Request Changes
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Right Panel */}
+                <div className="lg:col-span-6 flex flex-col space-y-4">
+                  <div className="card p-5 rounded-xl shadow-lg flex-1">
+                    <div className="flex justify-between items-center mb-4">
+                      <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider">
+                        Findings & Evidence
+                      </h2>
+                      {auditResult && (
+                        <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${
+                          auditResult.findings.length === 0 ? "badge-low text-emerald-400 border-emerald-500" : "badge-high"
+                        }`}>
+                          {auditResult.findings.length} Issue(s)
+                        </span>
+                      )}
+                    </div>
+
+                    {!auditResult && !loading && (
+                      <div className="h-64 flex flex-col items-center justify-center text-slate-500 text-center p-6">
+                        <p className="text-sm">Ready to audit.</p>
+                        <p className="text-xs text-slate-600 mt-1">Click "Run BrandGuard Audit" or change active brand rules in the Knowledge Base tab.</p>
+                      </div>
+                    )}
+
+                    {loading && (
+                      <div className="h-64 flex flex-col items-center justify-center text-slate-400 space-y-3">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-400"></div>
+                        <p className="text-xs">Auditing against active guidelines...</p>
+                      </div>
+                    )}
+
+                    {auditResult && (
+                      <div className="space-y-4 max-h-[550px] overflow-y-auto pr-1">
+                        {auditResult.findings.length === 0 ? (
+                          <div className="p-4 rounded-lg bg-emerald-950/30 border border-emerald-500/40 text-emerald-300 text-sm">
+                            Zero violations detected! Content complies with all {auditResult.brand_audited} rules.
+                          </div>
+                        ) : (
+                          auditResult.findings.map((item) => (
+                            <div key={item.id} className="p-4 rounded-lg bg-[#0B132B] border border-slate-800 space-y-2">
+                              <span className={`text-xs px-2 py-0.5 rounded font-bold uppercase tracking-wider ${
+                                item.severity === 'High' ? 'badge-high' : item.severity === 'Medium' ? 'badge-medium' : 'badge-low'
+                              }`}>
+                                {item.severity} - {item.category}
+                              </span>
+
+                              <p className="text-sm font-semibold text-slate-200">{item.issue}</p>
+
+                              <div className="text-xs text-slate-400 bg-slate-900/80 p-2.5 rounded border-l-2 border-amber-500">
+                                <strong className="text-slate-300">Evidence Link: </strong> {item.evidence}
+                              </div>
+
+                              {item.highlight_text && (
+                                <div className="text-xs text-rose-300 bg-rose-950/20 p-2 rounded">
+                                  <strong>Flagged Snippet: </strong> "{item.highlight_text}"
+                                </div>
+                              )}
+
+                              {item.suggested_fix && (
+                                <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between">
+                                  <div className="text-xs text-emerald-300">
+                                    <strong>Suggested Fix: </strong> "{item.suggested_fix}"
+                                  </div>
+                                  <button
+                                    onClick={() => handleApplyFix(item)}
+                                    className="text-xs bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/50 px-2.5 py-1 rounded transition"
+                                  >
+                                    Apply Rewrite
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+              </div>
+            )}
+
+            {/* TAB 2: Dynamic Knowledge Base & Auto-Extract from Website */}
+            {activeTab === "guidelines" && (
+              <div className="space-y-6">
+                
+                {/* Auto-Extract Card */}
+                <div className="card p-6 rounded-xl border border-emerald-500/40 bg-gradient-to-r from-[#1C2541] to-[#121c36]">
+                  <h3 className="text-lg font-bold text-white mb-1 flex items-center space-x-2">
+                    <span>🌐 Auto-Fill Brand Rules from Website URL</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mb-4">
+                    Enter any website (or brand name). BrandGuard AI will inspect the company and auto-generate the tone, approved facts, forbidden claims, and disclaimers.
+                  </p>
+
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <input
+                      type="text"
+                      value={websiteInput}
+                      onChange={(e) => setWebsiteInput(e.target.value)}
+                      placeholder="e.g. stripe.com, nike.com, openai.com"
+                      className="flex-1 bg-[#0B132B] border border-slate-700 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                    />
+                    <button
+                      onClick={() => handleAutoExtract()}
+                      disabled={extractLoading}
+                      className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-bold px-6 py-2.5 rounded-lg text-sm transition"
+                    >
+                      {extractLoading ? "Extracting Brand Rules..." : "Auto-Fill Brand Rules ✨"}
+                    </button>
+                  </div>
+
+                  {/* Preset quick buttons */}
+                  <div className="mt-3 flex items-center space-x-2 text-xs text-slate-400">
+                    <span>Try 1-click presets:</span>
+                    <button onClick={() => { setWebsiteInput("stripe.com"); handleAutoExtract("stripe.com"); }} className="underline hover:text-emerald-400">Stripe</button>
+                    <span>•</span>
+                    <button onClick={() => { setWebsiteInput("spotify.com"); handleAutoExtract("spotify.com"); }} className="underline hover:text-emerald-400">Spotify</button>
+                    <span>•</span>
+                    <button onClick={() => { setWebsiteInput("tesla.com"); handleAutoExtract("tesla.com"); }} className="underline hover:text-emerald-400">Tesla</button>
+                  </div>
+                </div>
+
+                {/* Current Active Rules Display */}
+                {guidelines && (
+                  <div className="card p-6 rounded-xl space-y-6">
+                    <div>
+                      <h3 className="text-base font-bold text-white">Active Compliance Profile: {guidelines.brand_name}</h3>
+                      <p className="text-xs text-slate-400">Tone: {guidelines.tone}</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+                      <div className="bg-[#0B132B] p-4 rounded-lg border border-slate-800">
+                        <h4 className="font-semibold text-emerald-400 mb-2">Approved Facts & Truth Cards</h4>
+                        <ul className="list-disc list-inside space-y-1.5 text-slate-300 text-xs">
+                          {guidelines.approved_facts.map((fact, idx) => (
+                            <li key={idx}>{fact}</li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div className="bg-[#0B132B] p-4 rounded-lg border border-slate-800">
+                        <h4 className="font-semibold text-rose-400 mb-2">Prohibited / Blacklisted Claims</h4>
+                        <div className="flex flex-wrap gap-2 mb-4">
+                          {guidelines.banned_words.map((word, idx) => (
+                            <span key={idx} className="badge-high text-xs px-2.5 py-1 rounded">
+                              {word}
+                            </span>
+                          ))}
+                        </div>
+
+                        <h4 className="font-semibold text-amber-400 mb-1">Mandatory Disclaimers</h4>
+                        <p className="text-xs text-slate-300 italic">{guidelines.mandatory_disclaimers[0]}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 3: History */}
+            {activeTab === "history" && (
+              <div className="card p-6 rounded-xl space-y-4">
+                <h3 className="text-lg font-bold text-white mb-1">Traceable Audit History & Governance Trail</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-[#0B132B] text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-700">
+                      <tr>
+                        <th className="p-3">Audit ID</th>
+                        <th className="p-3">Brand</th>
+                        <th className="p-3">Timestamp</th>
+                        <th className="p-3">Issues</th>
+                        <th className="p-3">Engine</th>
+                        <th className="p-3">Status</th>
+                        <th className="p-3">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {history.length === 0 ? (
+                        <tr><td colSpan="7" className="p-4 text-center text-slate-500">No records found.</td></tr>
+                      ) : (
+                        history.map((h) => (
+                          <tr key={h.id} className="hover:bg-slate-800/40">
+                            <td className="p-3 font-mono font-bold text-emerald-400">{h.id}</td>
+                            <td className="p-3 font-semibold text-white">{h.brand_audited || "AcmeCloud"}</td>
+                            <td className="p-3">{h.timestamp}</td>
+                            <td className="p-3">
+                              <span className={`px-2 py-0.5 rounded ${h.findings.length > 0 ? 'badge-high' : 'badge-low'}`}>
+                                {h.findings.length}
+                              </span>
+                            </td>
+                            <td className="p-3">{h.execution_source}</td>
+                            <td className="p-3">
+                              <span className={`font-semibold ${h.status === 'Approved' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                {h.status}
+                              </span>
+                            </td>
+                            <td className="p-3 text-slate-400">{h.reviewer_notes || "—"}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
